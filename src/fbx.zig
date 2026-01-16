@@ -291,7 +291,7 @@ pub fn load(allocator: std.mem.Allocator, path: []const u8) !FBXFile {
     const reader_pos: *u64 = try allocator.create(u64);
     defer allocator.destroy(reader_pos);
     reader_pos.* = reader.logicalPos();
-    while (readNode(allocator, &reader, reader_pos)) |node| {
+    while (readNode(allocator, &reader.interface, reader_pos)) |node| {
         const end = node.isEmpty();
         if (end) break;
         try result.nodes.put(node.name, node);
