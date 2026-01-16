@@ -1,11 +1,7 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 
-const FBXArrayInfo = helpers.FBXArrayInfo;
-
 const takeBytes = helpers.takeBytes;
-const readArray = helpers.readArray;
-const readArrayInfo = helpers.readArrayInfo;
 
 pub const FBXPropertyDataType = union(enum) {
     StringBinary: []u8, //'R'
@@ -14,7 +10,7 @@ pub const FBXPropertyDataType = union(enum) {
     ArrayDouble: []f64, //'d'
     ArrayLong: []i64, //'l'
     ArrayInteger: []i32, //'i'
-    ArrayBinary: []u1, //'b'
+    ArrayBool: []u8, //'b'
     Short: i16, //'Y'
     Bool: bool, //'C'
     Integer: i32, //'I'
@@ -64,6 +60,87 @@ pub const FBXFile = struct {
     version: u32,
 };
 
+const FBXArrayInfo = struct {
+    length: u32,
+    encoding: u32,
+    compressed_length: u32,
+
+    pub fn skipIfEncoded(self: FBXArrayInfo, allocator: std.mem.Allocator, reader: *std.Io.Reader) !bool {
+        if (self.encoding == 1) {
+            _ = try takeBytes(allocator, reader, self.compressed_length); // skip compressed data for now
+            return true;
+        } else return false;
+    }
+};
+
+fn readArrayInfo(reader: *std.Io.Reader) !FBXArrayInfo {
+    const length: u32 = try reader.takeInt(u32, .little);
+    const encoding = try reader.takeInt(u32, .little);
+    const compressed_length = try reader.takeInt(u32, .little);
+
+    return FBXArrayInfo{
+        .length = length,
+        .encoding = encoding,
+        .compressed_length = compressed_length,
+    };
+}
+
+fn decompressArray(allocator: std.mem.Allocator, compressed: []u8, comptime T: type) ![]T {
+    var fbs = std.Io.Reader.fixed(compressed);
+
+    var buffer: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompress = std.compress.flate.Decompress.init(&fbs, .zlib, &buffer);
+
+    var decompressed: std.ArrayList(u8) = .empty;
+    try decompress.reader.appendRemaining(allocator, &decompressed, .unlimited);
+    defer decompressed.deinit(allocator);
+
+    const count = decompressed.items.len / @sizeOf(T);
+    const array = try allocator.alloc(T, count);
+
+    const bytes = decompressed.items;
+
+    const bit_size_of_t = @bitSizeOf(T);
+    const IntType = switch (bit_size_of_t) {
+        8 => u8,
+        32 => u32,
+        64 => u64,
+        else => unreachable,
+    };
+
+    for (array, 0..) |*out, i| {
+        const chunk = bytes[i * bit_size_of_t / 8 ..][0 .. bit_size_of_t / 8];
+        const bits = std.mem.readInt(IntType, chunk, .little);
+        out.* = @bitCast(bits);
+    }
+
+    return array;
+}
+
+fn readArray(allocator: std.mem.Allocator, reader: *std.Io.Reader, comptime T: type) ![]T {
+    const array_info = try readArrayInfo(reader);
+    var array: []T = undefined;
+    if (array_info.encoding == 1) {
+        const compressed = try takeBytes(allocator, reader, array_info.compressed_length);
+        array = try decompressArray(allocator, compressed, T);
+    } else {
+        const bit_size_of_t = @bitSizeOf(T);
+        const IntType = switch (bit_size_of_t) {
+            8 => u8,
+            32 => u32,
+            64 => u64,
+            else => unreachable,
+        };
+
+        array = try allocator.alloc(T, array_info.length);
+        for (0..array_info.length) |i| {
+            array[i] = @bitCast(try reader.takeInt(IntType, .little));
+        }
+    }
+
+    return array;
+}
+
 fn readProperty(allocator: std.mem.Allocator, reader: *std.Io.Reader) !FBXProperty {
     const property_record_type: FBXPropertyType = try reader.takeInt(FBXPropertyType, .little);
 
@@ -101,13 +178,9 @@ fn readProperty(allocator: std.mem.Allocator, reader: *std.Io.Reader) !FBXProper
             data = FBXPropertyDataType{ .ArrayInteger = array };
         },
         'b' => {
-            //    []u1
-            // skip binary arrays for now
-            const array_info = try readArrayInfo(reader);
-            if (!try array_info.skipIfEncoded(allocator, reader)) {
-                const n = @divExact(array_info.length, 8);
-                _ = try reader.take(n);
-            }
+            //    []u8
+            const array = try readArray(allocator, reader, i32);
+            data = FBXPropertyDataType{ .ArrayBool = array };
         },
         'Y' => {
             const s = try reader.takeInt(i16, .little);
