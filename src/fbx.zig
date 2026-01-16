@@ -184,7 +184,7 @@ fn readProperty(allocator: std.mem.Allocator, reader: *std.Io.Reader) !FBXProper
         },
         'b' => {
             //    []u8
-            const array = try readArray(allocator, reader, i32);
+            const array = try readArray(allocator, reader, u8);
             data = FBXPropertyDataType{ .ArrayBool = array };
         },
         'Y' => {
