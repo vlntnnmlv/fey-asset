@@ -54,6 +54,10 @@ pub const FBXNode = struct {
     name: []u8,
     properties: std.ArrayList(FBXProperty) = .empty,
     children: std.StringHashMap(FBXNode),
+
+    pub fn isEmpty(self: FBXNode) bool {
+        return self.end_offset == 0 and self.num_properties == 0 and self.property_list_len == 0 and self.name_len == 0;
+    }
 };
 
 pub const FBXFile = struct {
