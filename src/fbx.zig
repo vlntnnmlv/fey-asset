@@ -58,6 +58,7 @@ pub const FBXNode = struct {
 
 pub const FBXFile = struct {
     version: u32,
+    nodes: std.StringHashMap(FBXNode),
 };
 
 const FBXArrayInfo = struct {
