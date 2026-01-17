@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("asset", .{
+    _ = b.addModule("fey_asset", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
