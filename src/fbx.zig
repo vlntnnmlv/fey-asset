@@ -3,92 +3,32 @@ const helpers = @import("helpers.zig");
 
 const takeBytes = helpers.takeBytes;
 
-pub const FBXPropertyDataType = union(enum) {
-    StringBinary: []u8, //'R'
-    String: []u8, //'S'
-    ArrayFloat: []f32, //'f'
-    ArrayDouble: []f64, //'d'
-    ArrayLong: []i64, //'l'
-    ArrayInteger: []i32, //'i'
-    ArrayBool: []u8, //'b'
-    Short: i16, //'Y'
-    Bool: bool, //'C'
-    Integer: i32, //'I'
-    Float: f32, //'F'
-    Double: f64, //'D'
-    Long: i64, //'L'
-    Empty: void,
-};
+var nodes_inited: usize = 0;
+var nodes_deinited: usize = 0;
 
-pub const FBXPropertyType = u8;
+const StringFBXNodeMultiMap = struct {
+    allocator: std.mem.Allocator,
+    map: std.StringHashMap(std.ArrayList(FBXNode)),
 
-pub const FBXProperty = struct {
-    record_type: FBXPropertyType,
-    data: FBXPropertyDataType,
+    const Self = @This();
 
-    // pub fn DataType(self: FBXProperty) type {
-    //     return switch (self.record_type) {
-    //         'R' => []u8,
-    //         'S' => []u8,
-    //         'f' => []f32,
-    //         'd' => []f64,
-    //         'l' => []i64,
-    //         'i' => []i32,
-    //         'b' => []u1,
-    //         'Y' => i16,
-    //         'C' => u1,
-    //         'I' => i32,
-    //         'F' => f32,
-    //         'D' => f64,
-    //         'L' => i64,
-    //         else => unreachable,
-    //     };
-    // }
-};
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .allocator = allocator,
+            .map = std.StringHashMap(std.ArrayList(FBXNode)).init(allocator),
+        };
+    }
 
-pub const FBXNode = struct {
-    end_offset: u32,
-    num_properties: u32,
-    property_list_len: u32,
-    name_len: u8,
-    name: []u8,
-    properties: std.ArrayList(FBXProperty) = .empty,
-    children: std.StringHashMap(FBXNode),
-
-    pub fn isEmpty(self: FBXNode) bool {
-        return self.end_offset == 0 and self.num_properties == 0 and self.property_list_len == 0 and self.name_len == 0;
+    pub fn put(self: Self, key: []const u8, value: FBXNode) !void {
+        if (self.map.getEntry(key)) |entry| {
+            entry.value_ptr.*.append(self.allocator, value);
+        } else {
+            var list: std.ArrayList(FBXNode) = .empty;
+            list.append(self.allocator, value);
+            try self.map.put(key, list);
+        }
     }
 };
-
-pub const FBXFile = struct {
-    version: u32,
-    nodes: std.StringHashMap(FBXNode),
-};
-
-const FBXArrayInfo = struct {
-    length: u32,
-    encoding: u32,
-    compressed_length: u32,
-
-    pub fn skipIfEncoded(self: FBXArrayInfo, allocator: std.mem.Allocator, reader: *std.Io.Reader) !bool {
-        if (self.encoding == 1) {
-            _ = try takeBytes(allocator, reader, self.compressed_length); // skip compressed data for now
-            return true;
-        } else return false;
-    }
-};
-
-fn readArrayInfo(reader: *std.Io.Reader) !FBXArrayInfo {
-    const length: u32 = try reader.takeInt(u32, .little);
-    const encoding = try reader.takeInt(u32, .little);
-    const compressed_length = try reader.takeInt(u32, .little);
-
-    return FBXArrayInfo{
-        .length = length,
-        .encoding = encoding,
-        .compressed_length = compressed_length,
-    };
-}
 
 fn decompressArray(allocator: std.mem.Allocator, compressed: []u8, comptime T: type) ![]T {
     var fbs = std.Io.Reader.fixed(compressed);
@@ -123,10 +63,12 @@ fn decompressArray(allocator: std.mem.Allocator, compressed: []u8, comptime T: t
 }
 
 fn readArray(allocator: std.mem.Allocator, reader: *std.Io.Reader, comptime T: type) ![]T {
-    const array_info = try readArrayInfo(reader);
+    const array_info = try FBXArrayInfo.init(reader);
     var array: []T = undefined;
     if (array_info.encoding == 1) {
         const compressed = try takeBytes(allocator, reader, array_info.compressed_length);
+        defer allocator.free(compressed);
+
         array = try decompressArray(allocator, compressed, T);
     } else {
         const bit_size_of_t = @bitSizeOf(T);
@@ -146,167 +88,396 @@ fn readArray(allocator: std.mem.Allocator, reader: *std.Io.Reader, comptime T: t
     return array;
 }
 
-fn readProperty(allocator: std.mem.Allocator, reader: *std.Io.Reader) !FBXProperty {
-    const property_record_type: FBXPropertyType = try reader.takeInt(FBXPropertyType, .little);
+pub const FBXPropertyDataType = union(enum) {
+    StringBinary: []u8, //'R'
+    String: []u8, //'S'
+    ArrayFloat: []f32, //'f'
+    ArrayDouble: []f64, //'d'
+    ArrayLong: []i64, //'l'
+    ArrayInteger: []i32, //'i'
+    ArrayBool: []u8, //'b'
+    Short: i16, //'Y'
+    Bool: bool, //'C'
+    Integer: i32, //'I'
+    Float: f32, //'F'
+    Double: f64, //'D'
+    Long: i64, //'L'
+    Empty: void,
+};
 
-    var data: ?FBXPropertyDataType = null;
-    switch (property_record_type) {
-        // special
-        'R' => {
-            const length = try reader.takeInt(u32, .little);
-            const binary_string = try takeBytes(allocator, reader, length);
-            data = FBXPropertyDataType{ .StringBinary = binary_string };
-        },
-        'S' => {
-            const length = try reader.takeInt(u32, .little);
-            const string = try takeBytes(allocator, reader, length);
-            data = FBXPropertyDataType{ .String = string };
-        },
-        // arrays
-        'f' => {
-            //    []f32
-            const array = try readArray(allocator, reader, f32);
-            data = FBXPropertyDataType{ .ArrayFloat = array };
-        },
-        'd' => {
-            const array = try readArray(allocator, reader, f64);
-            data = FBXPropertyDataType{ .ArrayDouble = array };
-        },
-        'l' => {
-            //    []i64
-            const array = try readArray(allocator, reader, i64);
-            data = FBXPropertyDataType{ .ArrayLong = array };
-        },
-        'i' => {
-            //    []i32
-            const array = try readArray(allocator, reader, i32);
-            data = FBXPropertyDataType{ .ArrayInteger = array };
-        },
-        'b' => {
-            //    []u8
-            const array = try readArray(allocator, reader, u8);
-            data = FBXPropertyDataType{ .ArrayBool = array };
-        },
-        'Y' => {
-            const s = try reader.takeInt(i16, .little);
-            data = FBXPropertyDataType{ .Short = s };
-        },
-        'C' => {
-            const raw = try reader.takeInt(i8, .little);
-            const b: bool = raw & -raw == 1;
-            data = FBXPropertyDataType{ .Bool = b };
-        },
-        'I' => {
-            const i = try reader.takeInt(i32, .little);
-            data = FBXPropertyDataType{ .Integer = i };
-        },
-        'F' => {
-            const raw = try reader.takeInt(u32, .little);
-            const f: f32 = @bitCast(raw);
-            data = FBXPropertyDataType{ .Float = f };
-        },
-        'D' => {
-            const raw = try reader.takeInt(u64, .little);
-            const d: f64 = @bitCast(raw);
-            data = FBXPropertyDataType{ .Double = d };
-        },
-        'L' => {
-            const l = try reader.takeInt(i64, .little);
-            data = FBXPropertyDataType{ .Long = l };
-        },
-        else => unreachable,
+pub const FBXPropertyType = u8;
+
+const FBXArrayInfo = struct {
+    length: u32,
+    encoding: u32,
+    compressed_length: u32,
+
+    const Self = @This();
+
+    pub fn init(reader: *std.Io.Reader) !Self {
+        const length: u32 = try reader.takeInt(u32, .little);
+        const encoding = try reader.takeInt(u32, .little);
+        const compressed_length = try reader.takeInt(u32, .little);
+
+        return Self{
+            .length = length,
+            .encoding = encoding,
+            .compressed_length = compressed_length,
+        };
     }
 
-    if (data == null) {
-        data = .Empty;
+    pub fn skip(self: Self, allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
+        _ = try takeBytes(allocator, reader, self.compressed_length); // skip compressed data
+    }
+};
+
+pub const FBXProperty = struct {
+    allocator: std.mem.Allocator,
+    record_type: FBXPropertyType,
+    data: FBXPropertyDataType,
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Self {
+        const property_record_type: FBXPropertyType = try reader.takeInt(FBXPropertyType, .little);
+        var data: ?FBXPropertyDataType = null;
+        switch (property_record_type) {
+            // special
+            'R' => {
+                const length = try reader.takeInt(u32, .little);
+                const binary_string = try takeBytes(allocator, reader, length);
+                data = FBXPropertyDataType{ .StringBinary = binary_string };
+            },
+            'S' => {
+                const length = try reader.takeInt(u32, .little);
+                const string = try takeBytes(allocator, reader, length);
+                data = FBXPropertyDataType{ .String = string };
+            },
+            // arrays
+            'f' => {
+                //    []f32
+                const array = try readArray(allocator, reader, f32);
+                data = FBXPropertyDataType{ .ArrayFloat = array };
+            },
+            'd' => {
+                const array = try readArray(allocator, reader, f64);
+                data = FBXPropertyDataType{ .ArrayDouble = array };
+            },
+            'l' => {
+                //    []i64
+                const array = try readArray(allocator, reader, i64);
+                data = FBXPropertyDataType{ .ArrayLong = array };
+            },
+            'i' => {
+                //    []i32
+                const array = try readArray(allocator, reader, i32);
+                data = FBXPropertyDataType{ .ArrayInteger = array };
+            },
+            'b' => {
+                //    []u8
+                const array = try readArray(allocator, reader, u8);
+                data = FBXPropertyDataType{ .ArrayBool = array };
+            },
+            'Y' => {
+                const s = try reader.takeInt(i16, .little);
+                data = FBXPropertyDataType{ .Short = s };
+            },
+            'C' => {
+                const raw = try reader.takeInt(i8, .little);
+                const b: bool = raw & -raw == 1;
+                data = FBXPropertyDataType{ .Bool = b };
+            },
+            'I' => {
+                const i = try reader.takeInt(i32, .little);
+                data = FBXPropertyDataType{ .Integer = i };
+            },
+            'F' => {
+                const raw = try reader.takeInt(u32, .little);
+                const f: f32 = @bitCast(raw);
+                data = FBXPropertyDataType{ .Float = f };
+            },
+            'D' => {
+                const raw = try reader.takeInt(u64, .little);
+                const d: f64 = @bitCast(raw);
+                data = FBXPropertyDataType{ .Double = d };
+            },
+            'L' => {
+                const l = try reader.takeInt(i64, .little);
+                data = FBXPropertyDataType{ .Long = l };
+            },
+            else => unreachable,
+        }
+
+        return Self{
+            .allocator = allocator,
+            .record_type = property_record_type,
+            .data = data.?,
+        };
     }
 
-    return FBXProperty{ .record_type = property_record_type, .data = data.? };
-}
+    pub fn deinit(self: Self) void {
+        switch (self.record_type) {
+            'R' => self.allocator.free(self.data.StringBinary),
+            'S' => self.allocator.free(self.data.String),
+            'f' => self.allocator.free(self.data.ArrayFloat),
+            'd' => self.allocator.free(self.data.ArrayDouble),
+            'l' => self.allocator.free(self.data.ArrayLong),
+            'i' => self.allocator.free(self.data.ArrayInteger),
+            'b' => self.allocator.free(self.data.ArrayBool),
+            else => {},
+        }
+    }
+};
 
-fn readNode(allocator: std.mem.Allocator, reader: *std.Io.Reader, reader_pos: *u64) !FBXNode {
-    const end_offset = reader.takeInt(u32, .little) catch |err| return err;
-    reader_pos.* += 4;
-    const num_properties = reader.takeInt(u32, .little) catch |err| return err;
-    reader_pos.* += 4;
-    const property_list_len = reader.takeInt(u32, .little) catch |err| return err;
-    reader_pos.* += 4;
-    const name_len = reader.takeInt(u8, .little) catch |err| return err;
-    reader_pos.* += 1;
-    const name = takeBytes(allocator, reader, name_len) catch |err| return err;
-    reader_pos.* += name_len;
+pub const FBXNode = struct {
+    allocator: std.mem.Allocator,
+    end_offset: u32,
+    num_properties: u32,
+    property_list_len: u32,
+    name_len: u8,
+    name: []u8,
+    properties: std.ArrayList(FBXProperty) = .empty,
+    children: std.StringHashMap(FBXNode),
+    // children2: StringFBXNodeMultiMap,
 
-    var node = FBXNode{
-        .end_offset = end_offset,
-        .num_properties = num_properties,
-        .property_list_len = property_list_len,
-        .name_len = name_len,
-        .name = name,
-        .children = std.StringHashMap(FBXNode).init(allocator),
-    };
+    const Self = @This();
 
-    if (node.isEmpty()) {
+    pub fn init(allocator: std.mem.Allocator, reader: *std.Io.Reader, reader_pos: *u64) !Self {
+        const end_offset = reader.takeInt(u32, .little) catch |err| return err;
+        reader_pos.* += 4;
+        const num_properties = reader.takeInt(u32, .little) catch |err| return err;
+        reader_pos.* += 4;
+        const property_list_len = reader.takeInt(u32, .little) catch |err| return err;
+        reader_pos.* += 4;
+        const name_len = reader.takeInt(u8, .little) catch |err| return err;
+        reader_pos.* += 1;
+        const name = takeBytes(allocator, reader, name_len) catch |err| return err;
+        reader_pos.* += name_len;
+
+        var node = Self{
+            .allocator = allocator,
+            .end_offset = end_offset,
+            .num_properties = num_properties,
+            .property_list_len = property_list_len,
+            .name_len = name_len,
+            .name = name,
+            .children = std.StringHashMap(FBXNode).init(allocator),
+            // .children2 = StringFBXNodeMultiMap.init(allocator),
+        };
+        nodes_inited += 1;
+
+        errdefer {
+            allocator.free(node.name);
+            node.properties.deinit(allocator);
+            node.children.deinit();
+        }
+
+        if (node.isEmpty()) {
+            return node;
+        }
+
+        // read properties
+        for (0..node.num_properties) |_| {
+            const property = try FBXProperty.init(allocator, reader);
+            errdefer property.deinit();
+            try node.properties.append(allocator, property);
+        }
+        reader_pos.* += node.property_list_len;
+
+        // read child nodes
+        if (node.end_offset > reader_pos.*) {
+            while (FBXNode.init(allocator, reader, reader_pos)) |child_node| {
+                var child_node_mut = child_node;
+                if (child_node_mut.isEmpty()) {
+                    child_node_mut.deinit();
+                    break;
+                }
+
+                var key: []const u8 = undefined;
+                if (node.children.getEntry(child_node.name)) |entry| {
+                    var value_mut = entry.value_ptr.*;
+                    value_mut.deinit();
+                    key = entry.key_ptr.*;
+                } else {
+                    key = try allocator.dupe(u8, child_node.name);
+                }
+
+                try node.children.put(key, child_node);
+            } else |err| {
+                return err;
+            }
+        }
+
+        // skip to the end
+        if (node.end_offset > reader_pos.*) {
+            const bytes_left = node.end_offset - reader_pos.*;
+            _ = try takeBytes(allocator, reader, bytes_left);
+            // allocator.free(skip);
+            reader_pos.* += bytes_left;
+        }
+
         return node;
     }
 
-    // read properties
-    for (0..node.num_properties) |_| {
-        try node.properties.append(allocator, try readProperty(allocator, reader));
+    pub fn deinit(self: *Self) void {
+        nodes_deinited += 1;
+
+        self.allocator.free(self.name);
+
+        for (self.properties.items) |property| {
+            property.deinit();
+        }
+
+        self.properties.deinit(self.allocator);
+
+        var children_it = self.children.iterator();
+        while (children_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+
+        self.children.deinit();
     }
-    reader_pos.* += node.property_list_len;
 
-    // read child node
-    if (node.end_offset > reader_pos.*) {
-        while (readNode(allocator, reader, reader_pos)) |child_node| {
-            if (child_node.isEmpty())
+    pub fn isEmpty(self: Self) bool {
+        return self.end_offset == 0 and self.num_properties == 0 and self.property_list_len == 0 and self.name_len == 0;
+    }
+
+    pub fn dump(self: Self, comptime depth: []const u8) void {
+        if (depth.len > 64) {
+            return;
+        }
+
+        std.debug.print("{s}<!{s}>\n", .{ depth, self.name });
+        std.debug.print("{s}  <Properties>\n", .{depth});
+        for (self.properties.items) |property| {
+            std.debug.print("{s}    [{c}]: {any}\n", .{ depth, property.record_type, property.data });
+        }
+        std.debug.print("{s}  </Properties>\n", .{depth});
+        std.debug.print("{s}  <Children>\n", .{depth});
+        var children = self.children.valueIterator();
+        while (children.next()) |child| {
+            child.*.dump(depth ++ "  ");
+        }
+        std.debug.print("{s}  </!Children>\n", .{depth});
+        std.debug.print("{s}<{s}/>\n", .{ depth, self.name });
+    }
+};
+
+pub const FBXFile = struct {
+    allocator: std.mem.Allocator,
+    version: u32,
+    children: std.StringHashMap(FBXNode),
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) !Self {
+        var buffer: [256]u8 = undefined;
+        var file: std.fs.File = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+        defer file.close();
+
+        var reader: std.fs.File.Reader = file.reader(&buffer);
+        const magic = try takeBytes(allocator, &reader.interface, 21);
+        defer allocator.free(magic);
+        const unknown = try takeBytes(allocator, &reader.interface, 2);
+        defer allocator.free(unknown);
+        const version = try reader.interface.takeInt(u32, .little);
+
+        var result = Self{
+            .allocator = allocator,
+            .version = version,
+            .children = std.StringHashMap(FBXNode).init(allocator),
+        };
+        // NO LEAKS ABOVE
+
+        var reader_pos: u64 = reader.logicalPos();
+        while (FBXNode.init(allocator, &reader.interface, &reader_pos)) |node| {
+            var node_mut = node;
+            if (node.isEmpty()) {
+                node_mut.deinit();
                 break;
+            }
 
-            try node.children.put(child_node.name, child_node);
+            const key = try allocator.dupe(u8, node.name);
+            try result.children.put(key, node);
         } else |err| {
-            return err;
+            switch (err) {
+                std.Io.Reader.Error.EndOfStream => {
+                    std.debug.print("FBX File reached the end!\n", .{});
+                },
+                else => return err,
+            }
+        }
+
+        return result;
+    }
+
+    pub fn deinit(self: *Self) void {
+        var children_it = self.children.iterator();
+        while (children_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+
+        self.children.deinit();
+    }
+
+    pub fn dump(self: Self) void {
+        std.debug.print("Version: {}\n", .{self.version});
+
+        var nodes = self.children.valueIterator();
+        while (nodes.next()) |node| {
+            node.*.dump("");
         }
     }
+};
 
-    // skip to the end
-    if (node.end_offset > reader_pos.*) {
-        const bytes_left = node.end_offset - reader_pos.*;
-        _ = try takeBytes(allocator, reader, bytes_left);
-        reader_pos.* += node.end_offset;
+const Data = struct {
+    allocator: std.mem.Allocator,
+    map: std.StringHashMap(u8),
+
+    pub fn init(allocator: std.mem.Allocator) !Data {
+        var map = std.StringHashMap(u8).init(allocator);
+
+        const key_first = try allocator.dupe(u8, "first");
+        const key_second = try allocator.dupe(u8, "second");
+
+        try map.put(key_first, 1);
+        try map.put(key_second, 2);
+        return Data{ .allocator = allocator, .map = map };
     }
 
-    return node;
+    pub fn deinit(self: *Data) void {
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+
+        self.map.deinit();
+    }
+};
+
+pub fn alloc_array_list_and_return_slice(allocator: std.mem.Allocator) ![]u8 {
+    var l: std.ArrayList(u8) = .empty;
+    try l.append(allocator, 69);
+    try l.append(allocator, 69);
+    try l.append(allocator, 69);
+    try l.append(allocator, 69);
+    try l.append(allocator, 69);
+
+    return l.toOwnedSlice(allocator);
 }
 
-pub fn load(allocator: std.mem.Allocator, path: []const u8) !FBXFile {
-    var buffer: [256]u8 = undefined;
-    var file: std.fs.File = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
-    defer file.close();
+test "fbx" {
+    // const allocator = std.heap.c_allocator;
+    const allocator = std.testing.allocator;
 
-    var reader: std.fs.File.Reader = file.reader(&buffer);
-    _ = try takeBytes(allocator, &reader.interface, 21);
-    _ = try takeBytes(allocator, &reader.interface, 2);
-    const version = try reader.interface.takeInt(u32, .little);
+    var cube = try FBXFile.init(allocator, "test/cube.fbx");
 
-    var result = FBXFile{
-        .version = version,
-        .nodes = std.StringHashMap(FBXNode).init(allocator),
-    };
+    cube.dump();
+    cube.deinit();
+    try std.testing.expectEqual(nodes_inited, nodes_deinited);
 
-    const reader_pos: *u64 = try allocator.create(u64);
-    defer allocator.destroy(reader_pos);
-    reader_pos.* = reader.logicalPos();
-    while (readNode(allocator, &reader.interface, reader_pos)) |node| {
-        const end = node.isEmpty();
-        if (end) break;
-        try result.nodes.put(node.name, node);
-    } else |err| {
-        switch (err) {
-            std.Io.Reader.Error.EndOfStream => {
-                std.debug.print("FBX File reached the end!\n", .{});
-            },
-            else => return err,
-        }
-    }
-
-    return result;
+    // const tree = try load("../test/tree.fbx");
+    // const rock = try load("../test/rock.fbx");
 }

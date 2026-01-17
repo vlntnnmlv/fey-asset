@@ -29,5 +29,5 @@ pub fn takeBytes(allocator: std.mem.Allocator, reader: *std.Io.Reader, n: usize)
         remaining -= section_size;
     }
 
-    return result.items;
+    return result.toOwnedSlice(allocator);
 }
