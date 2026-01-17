@@ -1,6 +1,6 @@
 .{
     .name = .fey_asset,
-    .fingerprint = 0x2af5a5cfd639584,
+    .fingerprint = 0x11dec0c441027f16,
     .paths = .{
         "build.zig",
         "build.zig.zon",
