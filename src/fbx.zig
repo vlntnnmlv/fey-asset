@@ -397,6 +397,23 @@ pub const FBXFile = struct {
         return result;
     }
 
+    pub fn vertices(self: Self) []f64 {
+        return self.children.get("Objects").?.children.get("Geometry").?.children.get("Vertices").?.properties.items[0].data.ArrayDouble;
+    }
+
+    pub fn triangles(self: Self) []i32 {
+        var data = self.children.get("Objects").?.children.get("Geometry").?.children.get("PolygonVertexIndex").?.properties.items[0].data.ArrayInteger;
+        for (0..data.len) |i| {
+            if (data[i] < 0)
+                data[i] = ~data[i];
+        }
+        return data;
+    }
+
+    pub fn uvs(self: Self) []f64 {
+        return self.children.get("Objects").?.children.get("Geometry").?.children.get("UV").?.properties.items[0].data.ArrayDouble;
+    }
+
     pub fn deinit(self: *Self) void {
         var children_it = self.children.iterator();
         while (children_it.next()) |entry| {
@@ -417,36 +434,15 @@ pub const FBXFile = struct {
     }
 };
 
-const Data = struct {
-    allocator: std.mem.Allocator,
-    map: std.StringHashMap(u8),
-
-    pub fn init(allocator: std.mem.Allocator) !Data {
-        var map = std.StringHashMap(u8).init(allocator);
-
-        const key_first = try allocator.dupe(u8, "first");
-        const key_second = try allocator.dupe(u8, "second");
-
-        try map.put(key_first, 1);
-        try map.put(key_second, 2);
-        return Data{ .allocator = allocator, .map = map };
-    }
-
-    pub fn deinit(self: *Data) void {
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-
-        self.map.deinit();
-    }
-};
-
 test "fbx" {
     const allocator = std.testing.allocator;
 
     var cube = try FBXFile.init(allocator, "test/cube.fbx");
     defer cube.deinit();
+
+    var cube_tr = try FBXFile.init(allocator, "test/cube_tr.fbx");
+    defer cube_tr.deinit();
+    cube_tr.dump();
 
     var tree = try FBXFile.init(allocator, "test/tree.fbx");
     defer tree.deinit();
