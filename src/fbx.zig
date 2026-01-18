@@ -424,7 +424,7 @@ pub const FBXFile = struct {
     }
 
     pub fn uvs(self: Self, allocator: std.mem.Allocator) ![]zlm.Vec2 {
-        const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("UV").?.children.get("LayerElementUV").?.properties.items[0].data.ArrayDouble;
+        const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("LayerElementUV").?.children.get("UV").?.properties.items[0].data.ArrayDouble;
         const num_uvs = @divExact(data.len, 2);
         var result: []zlm.Vec2 = try allocator.alloc(zlm.Vec2, num_uvs);
         for (0..num_uvs) |i| {
