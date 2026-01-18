@@ -399,7 +399,7 @@ pub const FBXFile = struct {
         return result;
     }
 
-    pub fn vertices(self: Self, allocator: std.mem.Allocator) ![]f64 {
+    pub fn vertices(self: Self, allocator: std.mem.Allocator) ![]zlm.Vec3 {
         const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("Vertices").?.properties.items[0].data.ArrayDouble;
         const num_vertices = @divExact(data.len, 3);
         var result: []zlm.Vec3 = try allocator.alloc(zlm.Vec3, num_vertices);
@@ -423,7 +423,7 @@ pub const FBXFile = struct {
         return data;
     }
 
-    pub fn uvs(self: Self, allocator: std.mem.Allocator) ![]f64 {
+    pub fn uvs(self: Self, allocator: std.mem.Allocator) ![]zlm.Vec2 {
         const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("UV").?.properties.items[0].data.ArrayDouble;
         const num_uvs = @divExact(data.len, 2);
         var result: []zlm.Vec2 = try allocator.alloc(zlm.Vec2, num_uvs);
