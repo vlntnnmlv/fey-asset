@@ -1,7 +1,7 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 
-const zlm = @import("zlm").as(f64);
+const zlm = @import("zlm").as(f32);
 
 const takeBytes = helpers.takeBytes;
 
@@ -405,9 +405,9 @@ pub const FBXFile = struct {
         var result: []zlm.Vec3 = try allocator.alloc(zlm.Vec3, num_vertices);
         for (0..num_vertices) |i| {
             result[i] = zlm.Vec3{
-                .x = data[i],
-                .y = data[i + 1],
-                .z = data[i + 2],
+                .x = @floatCast(data[i]),
+                .y = @floatCast(data[i + 1]),
+                .z = @floatCast(data[i + 2]),
             };
         }
 
@@ -429,8 +429,8 @@ pub const FBXFile = struct {
         var result: []zlm.Vec2 = try allocator.alloc(zlm.Vec2, num_uvs);
         for (0..num_uvs) |i| {
             result[i] = zlm.Vec2{
-                .x = data[i],
-                .y = data[i + 1],
+                .x = @floatCast(data[i]),
+                .y = @floatCast(data[i + 1]),
             };
         }
 
