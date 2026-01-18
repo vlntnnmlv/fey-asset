@@ -1,6 +1,8 @@
 const std = @import("std");
 const helpers = @import("helpers.zig");
 
+const zlm = @import("zlm").as(f64);
+
 const takeBytes = helpers.takeBytes;
 
 fn decompressArray(allocator: std.mem.Allocator, compressed: []u8, comptime T: type) ![]T {
@@ -397,8 +399,19 @@ pub const FBXFile = struct {
         return result;
     }
 
-    pub fn vertices(self: Self) []f64 {
-        return self.children.get("Objects").?.children.get("Geometry").?.children.get("Vertices").?.properties.items[0].data.ArrayDouble;
+    pub fn vertices(self: Self, allocator: std.mem.Allocator) ![]f64 {
+        const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("Vertices").?.properties.items[0].data.ArrayDouble;
+        const num_vertices = @divExact(data.len, 3);
+        var result: []zlm.Vec3 = try allocator.alloc(zlm.Vec3, num_vertices);
+        for (0..num_vertices) |i| {
+            result[i] = zlm.Vec3{
+                .x = data[i],
+                .y = data[i + 1],
+                .z = data[i + 2],
+            };
+        }
+
+        return result;
     }
 
     pub fn triangles(self: Self) []i32 {
@@ -410,8 +423,18 @@ pub const FBXFile = struct {
         return data;
     }
 
-    pub fn uvs(self: Self) []f64 {
-        return self.children.get("Objects").?.children.get("Geometry").?.children.get("UV").?.properties.items[0].data.ArrayDouble;
+    pub fn uvs(self: Self, allocator: std.mem.Allocator) ![]f64 {
+        const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("UV").?.properties.items[0].data.ArrayDouble;
+        const num_uvs = @divExact(data.len, 2);
+        var result: []zlm.Vec2 = try allocator.alloc(zlm.Vec2, num_uvs);
+        for (0..num_uvs) |i| {
+            result[i] = zlm.Vec2{
+                .x = data[i],
+                .y = data[i + 1],
+            };
+        }
+
+        return result;
     }
 
     pub fn deinit(self: *Self) void {
