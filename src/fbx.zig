@@ -342,10 +342,11 @@ pub const FBXNode = struct {
     }
 };
 
-const FBXFormatError = error{
+pub const FBXFormatError = error{
     FBXIsNotBinaryEncoded,
 };
 
+// TODO: Implement a Reader interface, exmaple given std.json.Reader
 pub const FBXFile = struct {
     allocator: std.mem.Allocator,
     version: u32,
@@ -359,6 +360,7 @@ pub const FBXFile = struct {
         defer file.close();
 
         var reader: std.fs.File.Reader = file.reader(&buffer);
+
         const magic = try takeBytes(allocator, &reader.interface, 21);
         defer allocator.free(magic);
         const should_be = "Kaydara FBX Binary";
@@ -400,7 +402,10 @@ pub const FBXFile = struct {
     }
 
     pub fn vertices(self: Self, allocator: std.mem.Allocator) ![]zlm.Vec3 {
-        const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("Vertices").?.properties.items[0].data.ArrayDouble;
+        const data = self.children.get("Objects").?
+            .children.get("Geometry").?
+            .children.get("Vertices").?
+            .properties.items[0].data.ArrayDouble;
         const num_vertices = @divExact(data.len, 3);
         var result: []zlm.Vec3 = try allocator.alloc(zlm.Vec3, num_vertices);
         for (0..num_vertices) |i| {
@@ -415,7 +420,10 @@ pub const FBXFile = struct {
     }
 
     pub fn triangles(self: Self) []i32 {
-        var data = self.children.get("Objects").?.children.get("Geometry").?.children.get("PolygonVertexIndex").?.properties.items[0].data.ArrayInteger;
+        var data = self.children.get("Objects").?
+            .children.get("Geometry").?
+            .children.get("PolygonVertexIndex").?
+            .properties.items[0].data.ArrayInteger;
         for (0..data.len) |i| {
             if (data[i] < 0)
                 data[i] = ~data[i];
@@ -424,7 +432,11 @@ pub const FBXFile = struct {
     }
 
     pub fn uvs(self: Self, allocator: std.mem.Allocator) ![]zlm.Vec2 {
-        const data = self.children.get("Objects").?.children.get("Geometry").?.children.get("LayerElementUV").?.children.get("UV").?.properties.items[0].data.ArrayDouble;
+        const data = self.children.get("Objects").?
+            .children.get("Geometry").?
+            .children.get("LayerElementUV").?
+            .children.get("UV").?
+            .properties.items[0].data.ArrayDouble;
         const num_uvs = @divExact(data.len, 2);
         var result: []zlm.Vec2 = try allocator.alloc(zlm.Vec2, num_uvs);
         for (0..num_uvs) |i| {
@@ -456,25 +468,3 @@ pub const FBXFile = struct {
         }
     }
 };
-
-test "fbx" {
-    const allocator = std.testing.allocator;
-
-    var cube = try FBXFile.init(allocator, "test/cube.fbx");
-    defer cube.deinit();
-
-    var cube_tr = try FBXFile.init(allocator, "test/cube_tr.fbx");
-    defer cube_tr.deinit();
-    // cube_tr.dump();
-
-    var tree = try FBXFile.init(allocator, "test/tree.fbx");
-    defer tree.deinit();
-    tree.dump();
-
-    try std.testing.expectEqual(2, 2);
-
-    var maybe_rock: FBXFile = FBXFile.init(allocator, "test/rock_ascii.fbx") catch |err| {
-        return try std.testing.expectEqual(FBXFormatError.FBXIsNotBinaryEncoded, err);
-    };
-    maybe_rock.deinit();
-}
