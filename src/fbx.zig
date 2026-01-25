@@ -426,7 +426,7 @@ pub const FBXFile = struct {
             .properties.items[0].data.ArrayInteger;
         var result: []u32 = try allocator.alloc(u32, data.len);
         for (0..data.len) |i| {
-            result[i] = if (data[i] < 0) ~data[i] else data[i];
+            result[i] = @intCast(if (data[i] < 0) ~data[i] else data[i]);
         }
 
         return result;
