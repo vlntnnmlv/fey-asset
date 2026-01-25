@@ -410,25 +410,26 @@ pub const FBXFile = struct {
         var result: []zlm.Vec3 = try allocator.alloc(zlm.Vec3, num_vertices);
         for (0..num_vertices) |i| {
             result[i] = zlm.Vec3{
-                .x = @floatCast(data[i]),
-                .y = @floatCast(data[i + 1]),
-                .z = @floatCast(data[i + 2]),
+                .x = @floatCast(data[i * 3 + 0]),
+                .y = @floatCast(data[i * 3 + 1]),
+                .z = @floatCast(data[i * 3 + 2]),
             };
         }
 
         return result;
     }
 
-    pub fn triangles(self: Self) []i32 {
-        var data = self.children.get("Objects").?
+    pub fn indices(self: Self, allocator: std.mem.Allocator) ![]u32 {
+        const data = self.children.get("Objects").?
             .children.get("Geometry").?
             .children.get("PolygonVertexIndex").?
             .properties.items[0].data.ArrayInteger;
+        var result: []u32 = try allocator.alloc(u32, data.len);
         for (0..data.len) |i| {
-            if (data[i] < 0)
-                data[i] = ~data[i];
+            result[i] = if (data[i] < 0) ~data[i] else data[i];
         }
-        return data;
+
+        return result;
     }
 
     pub fn uvs(self: Self, allocator: std.mem.Allocator) ![]zlm.Vec2 {
